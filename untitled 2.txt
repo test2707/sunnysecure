@@ -1,0 +1,516 @@
+# Add to PATH
+export PATH="${PATH}:/tools/shared/ci-utils/bin:/tools/cov-analysis-7.7.0/bin:/tools/shared/sonar-runner-2.4/bin"
+
+# Disable update messages and colors
+export FASTLANE_SKIP_UPDATE_CHECK=true
+export FASTLANE_DISABLE_COLORS=true
+
+# Fix xcpretty
+export LC_ALL=en_US.UTF-8
+
+# Password is stored in keychain
+export APPLE_ID="mpg-ci-team@citrix.com"
+
+# Obvious
+export SONAR_BRANCH="main"
+
+# Upload to Crashlytics
+export ENV_UPLOAD_TO_CRASHLYTICS=1
+
+# Increase the fastlane list timeout from 10s to 60s to prevent more build failures.
+export FASTLANE_XCODE_LIST_TIMEOUT=60
+
+# Version of Xcode for xcodebuild
+export DEVELOPER_DIR=/Applications/Xcode8-GM.app/Contents/Developer
+
+# SDK version
+export SDK_VERSION=10.0
+
+#Accept the Xcode license
+sudo $DEVELOPER_DIR/usr/bin/xcodebuild -license accept
+
+shopt -s nocasematch
+if [[ ! "main" == *"Rel_"* ]] && [[ ! "main" == *"main"* ]];
+then
+	export STREAM_NAME="main-"
+else
+	export STREAM_NAME=""
+fi
+shopt -u nocasematch
+
+# String replacement to provide the proper team id value and dynamic uuid
+gsed -i -e "s#KBVSJ83SS9#P2QGLXTE6L#g" ${WORKSPACE}/*.xcodeproj/project.pbxproj
+dynamic_uuid=`uuidgen`
+gsed -i -e "s#BBA30817-39DF-44CB-B7F9-2B85B27AC1D8#$dynamic_uuid#g" ${WORKSPACE}/*.xcodeproj/project.pbxproj
+
+# Unlock keychain before we do anything
+security default-keychain -d user -s "${HOME}/Library/Keychains/login.keychain"
+security unlock-keychain -p Citrix123 "${HOME}/Library/Keychains/login.keychain"
+
+APP_FOLDER_NAME="Secure Mail"
+EXISTING_BUNDLE_ID=com.citrix.mail.ios
+
+# TODO dependency management
+shopt -s nocasematch
+if [[ "main" == "CXM-30" ]] || [[ "main" == "CXM_30" ]] || [[ "main" == "CXM_30_AppStore" ]]
+then
+# APPSTORE. Consume latest CtxLogger from binaries without removing the contents of the destination folder
+/tools/shared/ci-utils/bin/depot-path-sync -p devsrc1:2701 \
+        -s "//ctxsdk/iOS/mdxsdk/AppStoreApps/WrapperSDKFiles" \
+        -d "MDX"
+else
+if [[ "main" == "CXM_9928" ]]
+then
+# CXM-14268. Consume latest CtxLogger from binaries without removing the contents of the destination folder
+/tools/shared/ci-utils/bin/depot-path-sync -p devsrc1:2701 \
+        -s "//ctxsdk/iOS/mdxsdk/CXM-9930/WrapperSDKFiles" \
+        -d "MDX"
+else
+if [[ "main" == "CXM-13929_HockeyAppEnhancement" ]]
+then
+# CXM-14268. Consume latest CtxLogger from binaries without removing the contents of the destination folder
+/tools/shared/ci-utils/bin/depot-path-sync -p devsrc1:2701 \
+        -s "//ctxsdk/iOS/mdxsdk/CXM-14268/WrapperSDKFiles" \
+        -d "MDX"
+else
+if [[ "main" == "CXM-3992_Replacing_Crashlytics_with_HockeyApp_for_crash_reporting" ]]
+then
+# HOCKEYAPP. Consume latest CtxLogger from binaries without removing the contents of the destination folder
+/tools/shared/ci-utils/bin/depot-path-sync -p devsrc1:2701 \
+        -s "//ctxsdk/iOS/mdxsdk/HockeyApp/WrapperSDKFiles" \
+        -d "MDX"
+else
+if [[ "main" == "CXM-11719_MDX_FileEncryptionSDK" ]]
+then
+# CXM-11719_MDX_FileEncryptionSDK. Consume everything from Main but the Worxsdk framework and MDXEnterprise which should be in the tree already.
+/tools/shared/ci-utils/bin/depot-path-sync -p devsrc1:2701 \
+        -s "//ctxsdk/iOS/mdxsdk/Main/WrapperSDKFiles" \
+        -d "MDX_Main/"
+#Now copy the required resources to the MDX folder
+rsync -avz MDX_Main/* MDX/ --exclude MDXEnterprise --exclude Worx.framework
+rm -rf MDX_Main
+else
+# REGULAR. Consume latest CtxLogger from binaries without removing the contents of the destination folder
+/tools/shared/ci-utils/bin/depot-path-sync -p devsrc1:2701 \
+        -s "//ctxsdk/iOS/mdxsdk/Main/WrapperSDKFiles" \
+        -d "MDX"
+fi
+fi
+fi
+fi
+fi
+
+if [[ "main" == *"CXM-"* ]] || [[ "main" == *"CXM_"* ]]
+then
+echo "Overwrite the policies for this feature stream with the vNext version instead of main"
+/tools/shared/ci-utils/bin/depot-path-sync -p devsrc1:2701 \
+        -s "//ctxsdk/MDXPolicies/vNext/PolicyTarget/iOS" \
+        -d "MDX/data"
+fi
+shopt -u nocasematch
+
+# Unlock keychain before we do anything
+security list-keychains -s "${HOME}/Library/Keychains/login.keychain"
+security default-keychain -d user -s "${HOME}/Library/Keychains/login.keychain"
+security unlock-keychain -p Citrix123 "${HOME}/Library/Keychains/login.keychain"
+security show-keychain-info "${HOME}/Library/Keychains/login.keychain"
+
+find ${WORKSPACE} -type f -exec chmod +w {} \; 
+
+ENTERPRISE_APP=${APP_NAME}Enterprise
+
+#########################################
+# Append technical version (usually the build number) to version and update the project with the new full version
+#   From manpage: agvtool should be invoked with the working directory set to your project directory
+#   TODO: Try putting in Xcode plugin, should verify
+##
+# Get new version number including appended technical version
+VERSION_NUMBER=`/usr/libexec/PlistBuddy -c Print:"CFBundleShortVersionString" "${WORKSPACE}/ExchangeMail/InfoPlists/$ENTERPRISE_APP-Info.plist"`
+agvtool new-version -all "${VERSION_NUMBER}-$STREAM_NAME${BUILD_NUMBER}"
+VERSION_NUMBER="$(/usr/libexec/PlistBuddy -c Print:"CFBundleVersion" "${WORKSPACE}/ExchangeMail/InfoPlists/$ENTERPRISE_APP-Info.plist")"
+
+# For informational purposes
+xcodebuild -version
+xcodebuild -showsdks
+xcodebuild -list
+
+# Delete and recreate simulator
+/tools/scripts/create_iOS_simulator.sh $DEVELOPER_DIR "$SIM_DEVICE" $SDK_VERSION
+    
+echo `date`": Start of tests without code-coverage enabled"
+# Run "test" buildaction using xcreport script, which produces report in the test-reports dir
+if /tools/shared/scripts/build/xcreport xcodebuild \
+        -scheme WorxmailUnitTests \
+        -sdk "iphonesimulator" \
+        -destination "platform=iOS Simulator,OS=latest,name=$SIM_DEVICE" \
+        -configuration Release \
+        clean test \
+        "VALID_ARCHS=x86_64" \
+        "ONLY_ACTIVE_ARCHS=YES" \
+        -derivedDataPath "${WORKSPACE}/DerivedData" \
+        MAIN_PROFILE="P2QGLXTE6L/* InHouse"
+then
+  echo "Test result is true - no code-coverage"
+else
+  echo "Test result is false - no code-coverage"
+fi
+echo `date`": End of tests without code-coverage enabled"
+
+mkdir -p "${WORKSPACE}/build/reports/"
+
+echo `date`": Start of tests with code-coverage enabled"
+# Run "test" buildaction using xcreport script, which produces report in the test-reports dir
+#set -o pipefail && \
+set -o pipefail
+
+if /tools/shared/scripts/build/xcreport \
+        xcodebuild build test \
+        -scheme "WorxmailUnitTests" \
+        -configuration "Release" \
+        -sdk "iphonesimulator" \
+        -destination "platform=iOS Simulator,OS=latest,name=$SIM_DEVICE" \
+        VALID_ARCHS="x86_64" \
+        ONLY_ACTIVE_ARCHS="YES" \
+        -derivedDataPath "${WORKSPACE}/DerivedData" \
+        -enableCodeCoverage "YES" \
+        | tee 'build/xcodebuild.log' \
+        | xcpretty \
+        --report html --output "build/reports/unit_test/report.html" \
+        --report junit --output "build/reports/unit_test/junit/TESTS-WorxmailUnitTests.xml" \
+        --report json-compilation-database \
+        --output "build/reports/unit_test/report.json-compilation-database" \
+        --simple
+then
+  echo "Test result is true - with code-coverage"
+else
+  echo "Test result is false - with code-coverage"
+fi
+set +o pipefail
+echo `date`": End of tests with code-coverage enabled"
+
+echo `date`": Start of Cobertura"
+# Generate Cobertura coverage report from profdata
+# Must run from source root directory
+/usr/local/bin/slather _2.3.0_ \
+        coverage \
+        --cobertura-xml \
+        --output-directory "${WORKSPACE}/build/reports/coverage-reports" \
+        --input-format profdata \
+        --build-directory "${WORKSPACE}/DerivedData" \
+        --binary-file "${WORKSPACE}/DerivedData/Build/Intermediates/CodeCoverage/Products/Release-iphonesimulator/${ENTERPRISE_APP}.app/${ENTERPRISE_APP}" \
+        --source-directory . \
+        --ignore '../**' \
+        --ignore 'thirdparty/**' \
+        --ignore 'WorxMailUITests/**' \
+        --ignore 'WorxmailUnitTests/**' \
+        --scheme '$ENTERPRISE_APP' \
+        *.xcodeproj
+echo `date`": End of Cobertura"
+
+echo `date`": Start of Lizard"
+lizard --xml ./ > ${WORKSPACE}/build/reports/lizard.xml
+echo `date`": End of Lizard"
+
+cp -f ${WORKSPACE}/build/reports/unit_test/report.json-compilation-database ${WORKSPACE}/compile_commands.json
+
+echo `date`": Start of OcLint"
+oclint \
+      -report-type="pmd" \
+      -o="build/reports/oclint.xml" \
+      -max-priority-1=20000 \
+      -max-priority-2=20000 \
+      -max-priority-3=20000 \
+      -p=${WORKSPACE} \
+      ${WORKSPACE}/ExchangeMail/*.m \
+      ${WORKSPACE}/SMIME/*.m
+echo `date`": End of OcLint"
+
+cat << _EOF > sonar-project.properties
+sonar.working.directory=build/sonar
+sonar.projectName=iOS WorxMail
+sonar.projectKey=com.citrix.ios:worxmail
+sonar.branch=$SONAR_BRANCH
+sonar.projectVersion=$VERSION_NUMBER
+
+sonar.cxx.suffixes.sources=.disabled
+sonar.cxx.suffixes.headers=.disabled
+sonar.c.file.suffixes=.disabled
+sonar.cpp.file.suffixes=.disabled
+sonar.objc.file.suffixes=.disabled
+sonar.objectivec.file.suffixes=.h,.m
+
+sonar.sources=ExchangeMail,SMIME
+#sonar.exclusions=ExchangeMail/models/generated/**,SMIME/CtxSMIME/OpenSSL/**,WorxmailUnitTests/**
+sonar.exclusions=ExchangeMail/models/generated/**,SMIME/CtxSMIME/OpenSSL/**
+
+sonar.tests=WorxmailUnitTests/AnalyticsTests
+sonar.test.exclusions=WorxmailUnitTests/utils/HtmlPreviewSnippetTests.m
+
+sonar.sourceEncoding=UTF-8
+
+# The XML files have to be prefixed by TEST otherwise they are not processed
+#sonar.objectivec.junit.reportsPath=build/reports/unit_test/junit
+sonar.objectivec.cobertura.reportPath=build/reports/coverage-reports/cobertura.xml
+sonar.objectivec.oclint.reportPath=build/reports/oclint.xml
+sonar.objectivec.lizard.reportPath=build/reports/lizard.xml
+sonar.objectivec.clang.reportsPath=build/reports/clang/StaticAnalyzer/*/WorxMail/*/*/
+_EOF
+
+if [[ ! -z $P4PORT ]] && [[ ! -z $P4USER ]] && [[ ! -z $P4CLIENT ]] && [[ ! -z $P4PASSWD ]]
+then
+  cat << _EOF >> sonar-project.properties
+sonar.scm.provider=perforce
+sonar.perforce.port=$P4PORT
+sonar.perforce.username=$P4USER
+sonar.perforce.password.secured=$P4PASSWD
+sonar.perforce.clientName=$P4CLIENT
+sonar.perforce.sockSoTimeout=120000
+_EOF
+
+fi
+
+/tools/shared/sonar-runner-2.4/bin/sonar-runner -e -X
+
+
+#Don't do the rest...
+if [[ "test" == "main" ]]
+then
+
+security find-certificate -a -c "iPhone Distribution: Citrix Systems, Inc" -Z | grep ^SHA-1
+
+# Build the regular app
+# "analyze" also does "build"
+xcodebuild \
+        -scheme $ENTERPRISE_APP \
+        -sdk "iphoneos${SDK_VERSION}" \
+        -configuration "Release" \
+        clean analyze \
+        "CONFIGURATION_BUILD_DIR=${WORKSPACE}/build" \
+        "CODE_SIGN_IDENTITY=iPhone Distribution: Citrix Systems, Inc" \
+        -derivedDataPath "${WORKSPACE}/DerivedData" \
+        MAIN_PROFILE="P2QGLXTE6L/* InHouse"
+        # Add "PROVISIONING_PROFILE=<uuid>" if multiple profiles for the above code sign identity (look for UUID key in profile)
+
+#Moved up to be available for sonar
+#VERSION_NUMBER="$(/usr/libexec/PlistBuddy -c Print:"CFBundleVersion" "${WORKSPACE}/ExchangeMail/InfoPlists/$ENTERPRISE_APP-Info.plist")"
+
+####### Start of Coverity - run at this point, so that we could break the build if required
+#######   ---   Only on main stream, due to conflicts with commit-defects
+if [[ "main" == "main" ]]
+then
+    # clang-to-cov won't create the out dir for us
+    mkdir -p build/coverity/
+
+    # Checks for existing Coverity stream and creates it if necessary
+    /tools/shared/coverity/cov-setup.sh
+
+    # Convert Clang results to Coverity import format
+    ANALYZER_DIR="$(find ${WORKSPACE}/DerivedData/Build/Intermediates/WorxMail.build/Release-iphoneos/$ENTERPRISE_APP.build -type d -name StaticAnalyzer)"
+    /tools/scripts/build/perl-bin/clang-to-coverity-v5.pl \
+        --clangdir "${ANALYZER_DIR}" \
+        --out "build/coverity/defects.json"
+
+    # If no defects were found then replace null with empty array on the resulting file
+    /usr/local/bin/gsed -i -e 's/null/\[\]/g' build/coverity/defects.json
+
+    # If no defects, at least one source file needs to be provided for the emit dir to be created
+    /usr/local/bin/gsed -i -e 's#"sources" : \[\]#"sources" : \[\{"file":"'"${WORKSPACE}/"'${WORKSPACE}/WorxMail.xcodeproj/project.pbxproj","encoding":"ASCII"\}\]#g' build/coverity/defects.json
+
+    # Parse JSON once to build emit data, which is needed for cov-import-scm
+    "${COVERITY_HOME}/bin/cov-import-results" \
+        --other-domain \
+        --dir "build/coverity/" \
+        --strip-path "${WORKSPACE}" \
+        "build/coverity/defects.json"
+
+    # Gather SCM data for emitted source
+    "${COVERITY_HOME}/bin/cov-import-scm" \
+        --dir "build/coverity/" \
+        --log "build/coverity/cov-import-scm.log" \
+        --scm perforce
+
+    # Parse JSON again with SCM data, otherwise commit fails because SCM data was added after initial import
+    "${COVERITY_HOME}/bin/cov-import-results" \
+        --other-domain \
+        --dir "build/coverity/" \
+        --strip-path "${WORKSPACE}" \
+        "build/coverity/defects.json"
+
+    # If no defects, generate this missing file that is required for commit
+    /tools/shared/coverity/cov-generate-analysismetricsxml.sh build/coverity/output/ANALYSIS.metrics.xml
+
+    # Commit
+    "${COVERITY_HOME}/bin/cov-commit-defects" \
+        --stream "${COVERITY_STREAM}" \
+        --dir "build/coverity/"
+fi
+#######  End of Coverity
+
+# Create regular IPA
+xcrun \
+        -sdk "iphoneos${SDK_VERSION}" \
+        PackageApplication \
+        -v \
+        "${WORKSPACE}/build/$ENTERPRISE_APP.app" \
+        -o "${WORKSPACE}/build/SecureMail-Release-InternalUse-${VERSION_NUMBER}.ipa"
+
+# Create the regular dSYM.zip package
+ditto \
+        -c \
+        -k \
+        --keepParent \
+        --rsrc \
+        "${WORKSPACE}/build/$ENTERPRISE_APP.app.dSYM" \
+        "${WORKSPACE}/build/SecureMail-Release-InternalUse-${VERSION_NUMBER}-dSYM.zip"
+
+# Resign for external distribution
+/tools/shared/scripts/build/floatsign.sh \
+        "${WORKSPACE}/build//SecureMail-Release-InternalUse-${VERSION_NUMBER}.ipa" \
+        "iPhone Distribution: Citrix Systems, Inc" \
+        -p "/tools/signing/ios/citrix-systems-distribution/_AdHoc.mobileprovision" \
+        "${WORKSPACE}/build/SecureMail-Release-CustomerUse-${VERSION_NUMBER}.ipa"
+
+APP_STORE_APP=${APP_NAME}AppStore
+
+shopt -s extglob
+cp -v "$WORKSPACE/ExchangeMail/InfoPlists/$APP_STORE_APP-Info.plist" "$WORKSPACE/ExchangeMail/InfoPlists/$APP_STORE_APP-Info.plistBKP"
+cp -v "$WORKSPACE/WorxMail.xcodeproj/project.pbxproj" "$WORKSPACE/WorxMail.xcodeproj/project.pbxprojBKP"
+
+APPSTORE_CONFIGURATION=( "External%iPhone Distribution: Zenprise (S272Y5R93J)%S272Y5R93J%CitrixSecureMail Profile%com.citrix.mail.ios%XGFUKY3N5P"
+                         "Internal%iPhone Distribution: Zenprise%B6PJY8ADY4%CitrixSecureMail InternalTest Profile%com.citrix.mail.ios.InternalTest%G3SMV9832J" )
+
+for APP_ITEM in "${APPSTORE_CONFIGURATION[@]}" ;
+do
+   :
+
+     DISTRIBUTION=`echo $APP_ITEM | cut -d '%' -f1`
+     CODE_SIGN_ID_VALUE=`echo $APP_ITEM | cut -d '%' -f2`
+     TEAM_NAME_VALUE=`echo $APP_ITEM | cut -d '%' -f3`
+     PROFILE_VALUE=`echo $APP_ITEM | cut -d '%' -f4`
+     BUNDLEID_VALUE=`echo $APP_ITEM | cut -d '%' -f5`
+     APPIDPREFIX_VALUE=`echo $APP_ITEM | cut -d '%' -f6`
+
+     #Replace the bundle ID with the one from the profile
+     rm -f "$WORKSPACE/ExchangeMail/InfoPlists/$APP_STORE_APP-Info.plist"
+     rm -f "$WORKSPACE/WorxMail.xcodeproj/project.pbxproj"
+     cp -v "$WORKSPACE/ExchangeMail/InfoPlists/$APP_STORE_APP-Info.plistBKP" "$WORKSPACE/ExchangeMail/InfoPlists/$APP_STORE_APP-Info.plist"
+     cp -v "$WORKSPACE/WorxMail.xcodeproj/project.pbxprojBKP" "$WORKSPACE/WorxMail.xcodeproj/project.pbxproj"
+     gsed -i -e "s#$EXISTING_BUNDLE_ID#$BUNDLEID_VALUE#g" "$WORKSPACE/ExchangeMail/InfoPlists/$APP_STORE_APP-Info.plist"
+    # String replacement to provide the proper team id value
+    gsed -i -e "s#P2QGLXTE6L#$APPIDPREFIX_VALUE#g" ${WORKSPACE}/*.xcodeproj/project.pbxproj
+
+     #If this is the internal version then rename the mdx policy to match the bundle id
+     if [[ $BUNDLEID_VALUE == *"InternalTest"* ]] && [[ -f $WORKSPACE/MDX/data/com.citrix.mail.ios_policy_metadata.xml ]]
+     then
+         cp -v $WORKSPACE/MDX/data/com.citrix.mail.ios_policy_metadata.xml $WORKSPACE/MDX/data/$BUNDLEID_VALUE\_policy_metadata.xml
+     fi
+
+    if [[ $BUNDLEID_VALUE != *"InternalTest"* ]]
+    then
+         #Build the External AppStore app
+         xcodebuild \
+		    -scheme $APP_STORE_APP \
+		    -sdk "iphoneos${SDK_VERSION}" \
+            -configuration AppStoreDistribution \
+            archive \
+            "APP_NAME=Secure Mail" \
+            "CONFIGURATION_BUILD_DIR=${WORKSPACE}/build" \
+            "CODE_SIGN_IDENTITY=$CODE_SIGN_ID_VALUE" \
+            "DEVELOPMENT_TEAM=$TEAM_NAME_VALUE" \
+            -archivePath "build/Secure Mail.xcarchive" \
+            MAIN_PROFILE="$TEAM_NAME_VALUE/$PROFILE_VALUE"
+            
+            # Remove the plist if exists
+            [[ -f exportOptions.plist ]] && rm -f exportOptions.plist
+            
+cat << _EOF > exportOptions.plist 
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>method</key>
+    <string>app-store</string>
+    <key>teamID</key>
+    <string>S272Y5R93J</string>
+</dict>
+</plist>
+_EOF
+    
+    xcodebuild -exportArchive -archivePath "build/Secure Mail.xcarchive" -exportOptionsPlist exportOptions.plist -exportPath build
+
+    mv -v build/WorxMailAppStore.ipa build/SecureMail-$DISTRIBUTION-${VERSION_NUMBER}-AppStore.ipa
+    
+    else
+    
+         #Build the Internal AppStore app
+         xcodebuild \
+		    -target $APP_STORE_APP \
+		    -sdk "iphoneos${SDK_VERSION}" \
+            -configuration "Release" \
+            clean build \
+            "CONFIGURATION_BUILD_DIR=${WORKSPACE}/build" \
+            "CODE_SIGN_IDENTITY=$CODE_SIGN_ID_VALUE" \
+            "DEVELOPMENT_TEAM=$TEAM_NAME_VALUE" \
+            MAIN_PROFILE="$TEAM_NAME_VALUE/$PROFILE_VALUE"
+    
+        # Create AppStore IPA
+        xcrun \
+            -sdk "iphoneos${SDK_VERSION}" \
+            PackageApplication \
+            -v \
+            "${WORKSPACE}/build/$APP_STORE_APP.app" \
+           -o "${WORKSPACE}/build/SecureMail-$DISTRIBUTION-AppStore-${VERSION_NUMBER}.ipa"
+    fi
+
+    # Create the regular dSYM.zip package
+    ditto \
+        -c \
+        -k \
+        --keepParent \
+        --rsrc \
+        "${WORKSPACE}/build/$APP_STORE_APP.app.dSYM" \
+        "${WORKSPACE}/build/SecureMail-$DISTRIBUTION-AppStore-${VERSION_NUMBER}-dSYM.zip"
+
+    #Rename the mdx appstore file accordingly
+    mv "${WORKSPACE}/build/$APP_STORE_APP.mdx" ${WORKSPACE}/build/SecureMail-$DISTRIBUTION-AppStore-${VERSION_NUMBER}.mdx 
+    pushd $WORKSPACE/build
+###    rm -rf !(*.ipa|*.mdx|*.zip)
+    popd
+done
+
+# We upload to Testfairy on main and every other stream with the upload_to_testfairy file present in their client view (NOT ignored)
+shopt -s nocasematch
+if [[ -f ${WORKSPACE}/upload_to_testfairy ]] || [[ "main" == "main" ]]
+then
+	# TestFairy for regular build
+	/tools/shared/scripts/build/testfairy-upload-ios.sh \
+        build/*InternalUse-*.ipa \
+        "DEVTEST,DEV,EvalGroup,Exec,PDPM,SalesMPG,WhiteGlove,OtherMPG" \
+        "${JOB_NAME} -- Changes: ${BUILD_URL}/changes" \
+        || echo "TestFairy upload failed.  Ignoring."
+fi
+shopt -u nocasematch
+
+#Lets run sonar only on main stream
+#shopt -s nocasematch
+#if [[ "main" = "main" ]]
+#then
+#	if grep -q "lane :sonarqube" fastlane/Fastfile
+#	then
+#	    fastlane ios sonarqube
+#	fi
+#fi
+#shopt -u nocasematch
+
+#Uploading to HockeyApp
+echo "Uploading to HockeyApp"
+DSYM_FILE=`ls $WORKSPACE/build/*InternalUse*dSYM*`
+curl -F "status=2" -F "notify=0" -F "notes=$JOB_NAME" -F "notes_type=0" -F "dsym=@$DSYM_FILE" -H "X-HockeyAppToken: bbcccab3e6824915953098fd1c6285e4" https://rink.hockeyapp.net/api/2/apps/upload
+
+# This crap is for automation, never fail build because of it
+/tools/shared/scripts/build/copying_automation_resources.sh AutomationTest
+
+#End of "Don't do"
+fi
+
+p4 client -d $P4CLIENT
